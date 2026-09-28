@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>XM Gate</title>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <link rel="stylesheet" href="static/style.css">
+</head>
+<body>
+  <main id="app">
+    <header>
+      <p class="eyebrow" id="chat">Join request</p>
+      <h1 id="title">Tap the two faction logos</h1>
+      <p class="sub" id="sub">Enlightened and Resistance. Everything else is gear.</p>
+    </header>
+
+    <section id="challenge" hidden>
+      <div class="grid" id="grid" role="group" aria-label="Captcha tiles"></div>
+      <p class="msg" id="msg" aria-live="polite"></p>
+      <button class="primary" id="check" type="button" disabled>Pick two tiles</button>
+    </section>
+
+    <section id="state" hidden>
+      <div class="badge" id="state-icon" aria-hidden="true"></div>
+      <p class="state-text" id="state-text"></p>
+      <a class="primary link" id="state-link" hidden>Open the chat</a>
+    </section>
+
+    <footer id="manual-box" hidden>
+      <p class="hint" id="manual-hint" hidden>Having trouble? A chat admin can let you in by hand.</p>
+      <button class="secondary" id="manual" type="button">Ask an admin to approve me instead</button>
+    </footer>
+  </main>
+  <script src="static/app.js"></script>
+</body>
+</html>
