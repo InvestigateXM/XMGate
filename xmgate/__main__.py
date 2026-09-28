@@ -2,6 +2,7 @@ import asyncio
 import logging
 
 from aiogram import Bot, Dispatcher
+from aiogram.exceptions import TelegramAPIError
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
 from aiohttp import web
 
@@ -22,8 +23,25 @@ async def startup_checks(bot: Bot) -> None:
     if not me.supports_join_request_queries:
         log.warning(
             "getMe says supports_join_request_queries is false: join requests will use the DM fallback, "
-            "not the Mini App opening by itself. See README, 'Assign the bot to process join requests'."
+            "not the Mini App opening by itself. See README step 6."
         )
+
+
+async def set_webhook(bot: Bot, cfg) -> None:
+    """Keeps retrying, so the bot can start before the reverse proxy and certificate are in place."""
+    while True:
+        try:
+            await bot.set_webhook(
+                cfg.webhook_url,
+                secret_token=cfg.webhook_secret,
+                allowed_updates=ALLOWED_UPDATES,
+                drop_pending_updates=True,
+            )
+            log.info("Webhook set to %s", cfg.webhook_url)
+            return
+        except TelegramAPIError as e:
+            log.warning("Could not set webhook to %s (%s). Is the proxy host set up? Retrying in 30 s.", cfg.webhook_url, e)
+            await asyncio.sleep(30)
 
 
 async def build_app() -> tuple[web.Application, Dispatcher, Bot, Gate]:
@@ -57,13 +75,7 @@ async def main() -> None:
 
     try:
         if cfg.mode == "webhook":
-            await bot.set_webhook(
-                cfg.webhook_url,
-                secret_token=cfg.webhook_secret,
-                allowed_updates=ALLOWED_UPDATES,
-                drop_pending_updates=True,
-            )
-            log.info("Webhook set to %s", cfg.webhook_url)
+            await set_webhook(bot, cfg)
             await asyncio.Event().wait()
         else:
             await bot.delete_webhook(drop_pending_updates=True)

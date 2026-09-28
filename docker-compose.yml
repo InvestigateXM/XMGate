@@ -1,28 +1,23 @@
+# Runs the bot behind an existing Nginx Proxy Manager (NPM).
+# The app joins NPM's Docker network, so NPM reaches it at http://xmgate:8080.
+# No ports are published on the host. For a server without a reverse proxy,
+# use docker-compose.caddy.yml instead.
 services:
   app:
     build: .
     env_file: .env
     volumes:
       - data:/data
-    restart: unless-stopped
-
-  caddy:
-    image: caddy:2
-    ports:
-      - "80:80"
-      - "443:443"
-      - "443:443/udp"
-    environment:
-      DOMAIN: ${DOMAIN}
-    volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - caddy_data:/data
-      - caddy_config:/config
-    depends_on:
-      - app
+    networks:
+      proxy:
+        aliases:
+          - xmgate
     restart: unless-stopped
 
 volumes:
   data:
-  caddy_data:
-  caddy_config:
+
+networks:
+  proxy:
+    external: true
+    name: ${NPM_NETWORK:-npm_default}
