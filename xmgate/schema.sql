@@ -47,3 +47,15 @@ CREATE TABLE IF NOT EXISTS attempts (
   had_touch       boolean
 );
 CREATE INDEX IF NOT EXISTS attempts_user ON attempts (tg_user_id, answered_at);
+
+-- Chats the bot has been added to (design §2). log_chat_id is an optional chat for one line per decision.
+CREATE TABLE IF NOT EXISTS chats (
+  chat_id           bigint PRIMARY KEY,
+  type              text NOT NULL,
+  title             text,
+  username          text,
+  is_active         boolean NOT NULL DEFAULT true,
+  has_invite_right  boolean NOT NULL DEFAULT false,
+  log_chat_id       bigint,
+  added_at          timestamptz NOT NULL DEFAULT now()
+);

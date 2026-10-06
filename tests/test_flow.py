@@ -5,92 +5,13 @@ Needs TEST_DATABASE_URL, a database the tests may wipe, for example:
     export TEST_DATABASE_URL=postgresql://postgres:test@localhost:5433/postgres
 """
 
-import os
 import time
-from types import SimpleNamespace
 
-import pytest
-from aiohttp import web
-from aiohttp.test_utils import TestClient, TestServer
-
+from helpers import CHAT, TOKEN, USER, answer_ids, call, join_request, latest_attempt, needs_postgres
 from xmgate import captcha
-from xmgate.api import setup_api
-from xmgate.config import Config
-from xmgate.db import DB
-from xmgate.flow import Gate
 from xmgate.initdata import sign_init_data
 
-TOKEN = "123456:TEST"
-USER = 1001
-CHAT = -100500
-
-
-class FakeBot:
-    def __init__(self):
-        self.calls = []
-
-    def __getattr__(self, name):
-        async def call(*args, **kwargs):
-            self.calls.append((name, kwargs))
-            return SimpleNamespace(message_id=77)
-
-        return call
-
-    def names(self):
-        return [c[0] for c in self.calls]
-
-
-def join_request(query_id="q-1", user_id=USER):
-    return SimpleNamespace(
-        from_user=SimpleNamespace(id=user_id, username="agent"),
-        chat=SimpleNamespace(id=CHAT, title="Test Ingress Chat", username="testingress"),
-        user_chat_id=user_id,
-        query_id=query_id,
-    )
-
-
-DATABASE_URL = os.environ.get("TEST_DATABASE_URL")
-pytestmark = pytest.mark.skipif(not DATABASE_URL, reason="set TEST_DATABASE_URL to run the PostgreSQL tests")
-
-
-async def fresh_db() -> DB:
-    import asyncpg
-
-    conn = await asyncpg.connect(DATABASE_URL)
-    await conn.execute("DROP SCHEMA public CASCADE; CREATE SCHEMA public")
-    await conn.close()
-    return await DB.open(DATABASE_URL)
-
-
-@pytest.fixture
-async def env():
-    cfg = Config(TOKEN, "https://gate.example", "s", "webhook", 300, DATABASE_URL, b"pepper", 0)
-    db = await fresh_db()
-    bot = FakeBot()
-    gate = Gate(bot, db, cfg)
-    app = web.Application()
-    setup_api(app, gate)
-    client = TestClient(TestServer(app))
-    await client.start_server()
-    yield SimpleNamespace(gate=gate, bot=bot, db=db, client=client)
-    await client.close()
-    await db.close()
-
-
-async def call(env, path, jr_id, user_id=USER, **body):
-    init = sign_init_data({"user": {"id": user_id, "first_name": "A"}, "auth_date": int(time.time())}, TOKEN)
-    token = env.gate.self_token(user_id) if jr_id == "self" else env.gate.request_token(jr_id, user_id)
-    res = await env.client.post(f"/api/{path}", json={"r": token, **body}, headers={"Authorization": f"tma {init}"})
-    return res.status, (await res.json() if res.status == 200 else await res.text())
-
-
-def answer_ids(stored):
-    return [t["id"] for t in stored if t["answer"]]
-
-
-async def latest_attempt(env):
-    row = await env.db._one("SELECT * FROM attempts ORDER BY issued_at DESC LIMIT 1")
-    return row["id"], row["tiles"]
+pytestmark = needs_postgres
 
 
 async def test_unknown_user_gets_mini_app_then_approved(env):

@@ -176,6 +176,41 @@ class DB:
             now - grace_seconds,
         )
 
+    # chats (design §2)
+
+    async def upsert_chat(
+        self,
+        chat_id: int,
+        chat_type: str,
+        title: str | None,
+        username: str | None,
+        is_active: bool | None = None,
+        has_invite_right: bool | None = None,
+    ) -> None:
+        """Records a chat. is_active and has_invite_right keep their stored value when passed as None."""
+        await self._run(
+            "INSERT INTO chats (chat_id, type, title, username, is_active, has_invite_right) "
+            "VALUES ($1, $2, $3, $4, coalesce($5, true), coalesce($6, false)) "
+            "ON CONFLICT (chat_id) DO UPDATE SET type = excluded.type, title = excluded.title, "
+            "username = excluded.username, is_active = coalesce($5, chats.is_active), "
+            "has_invite_right = coalesce($6, chats.has_invite_right)",
+            chat_id,
+            chat_type,
+            title,
+            username,
+            is_active,
+            has_invite_right,
+        )
+
+    async def get_chat(self, chat_id: int):
+        return await self._one("SELECT * FROM chats WHERE chat_id = $1", chat_id)
+
+    async def active_chats(self):
+        return await self._all("SELECT * FROM chats WHERE is_active ORDER BY title")
+
+    async def set_log_chat(self, chat_id: int, log_chat_id: int | None) -> None:
+        await self._run("UPDATE chats SET log_chat_id = $2 WHERE chat_id = $1", chat_id, log_chat_id)
+
     # attempts
 
     async def add_attempt(self, attempt_id: str, user_id: int, jr_id: int | None, tiles: list) -> None:

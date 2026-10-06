@@ -12,6 +12,7 @@ from aiogram.types import (
     WebAppInfo,
 )
 
+from .admin import build_admin_router
 from .flow import Gate
 
 INTRO = (
@@ -133,4 +134,7 @@ def build_router(gate: Gate) -> Router:
         if cb.message:
             await cb.message.edit_text(text, reply_markup=keyboard)
 
-    return router
+    # Admin commands and the log chat picker go first: the DM menu above answers any private message.
+    root = Router()
+    root.include_routers(build_admin_router(gate), router)
+    return root
