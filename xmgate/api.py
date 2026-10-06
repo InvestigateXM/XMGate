@@ -148,7 +148,7 @@ def setup_api(app: web.Application, gate: Gate) -> None:
         if ctx.jr is None:
             raise web.HTTPBadRequest(text="no join request to hand to the admins")
         if ctx.jr["outcome"] in OPEN:
-            await gate.resolve(ctx.jr, "queue")
+            await gate.hand_to_admins(ctx.jr)
         jr = await db.get_join_request(ctx.jr["id"])
         return web.json_response({"status": "queued" if jr["outcome"] == "queued" else jr["outcome"]})
 

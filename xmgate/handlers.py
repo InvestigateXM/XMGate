@@ -12,6 +12,7 @@ from aiogram.types import (
     WebAppInfo,
 )
 
+from .admin import build_admin_router
 from .flow import Gate
 
 INTRO = (
@@ -19,9 +20,9 @@ INTRO = (
     "Once you have passed the captcha, all chats that use this bot will automatically approve you in the future."
 )
 OPTED_OUT = (
-    "You asked not to process your data. Your join requests will go straight to each chat's admins, "
-    "and all we keep is an anonymous marker so the bot knows to ignore you.\n\n"
-    "Tap Verify me if you'd like automatic approval again. This will clear the marker and turns processing back on."
+    "You asked the XM Gate bot not to process your data. Your join requests will go straight to each chat's admins, "
+    "and the bot only keeps an anonymous marker so it knows to ignore you.\n\n"
+    "Tap Verify me if you'd like automatic approval again. This will clear the marker and turn processing back on."
 )
 
 
@@ -99,7 +100,7 @@ def build_router(gate: Gate) -> Router:
             text, keyboard = await my_data(user_id), back()
         elif action == "delete":
             text = (
-                "Delete all data this bot has stored? Next time you ask to join a chat that uses the bot, "
+                "Delete all data the bot has stored about you? Next time you ask to join a chat that uses the bot, "
                 "you'll see the captcha again."
             )
             keyboard = InlineKeyboardMarkup(
@@ -133,4 +134,7 @@ def build_router(gate: Gate) -> Router:
         if cb.message:
             await cb.message.edit_text(text, reply_markup=keyboard)
 
-    return router
+    # Admin commands and the log chat picker go first: the DM menu above answers any private message.
+    root = Router()
+    root.include_routers(build_admin_router(gate), router)
+    return root

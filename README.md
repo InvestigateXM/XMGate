@@ -96,6 +96,13 @@ Once the proxy host is saved, the log should show `Running as @yourbot`, `Webhoo
 3. Add the bot as an admin with **Invite users via link**. Nothing else is needed.
 4. Assign the bot to process the group's join requests (in the group's join-request or admin settings). This is what makes Telegram hand the request to the bot with a `query_id`. The exact place in the Telegram app is one of the things this test should confirm.
 
+Once the bot is an admin it posts a setup check in the group listing anything still missing. Tap **Check again** after changing a setting. Group admins can also send:
+
+- `/setup` to post the check again.
+- `/link` to get a request-to-join invite link made by the bot.
+
+Channels can't take commands, and a post there would reach every subscriber, so for a channel the bot sends the setup check by DM to the admin who added it (if that admin has started the bot). Any admin can send `/admin` to the bot in a DM to see the chats they run. For each chat they can rerun the check, make a link, and pick an optional **log chat**. That's a group or channel where the bot posts one line per decision, such as "Approved @name in Chat. Passed the captcha 42 days ago in another chat." The bot has to be in the log chat and allowed to post there.
+
 ### 7. Request to join
 
 From the second account, open the group link and request to join. The captcha should open by itself. Things worth trying:

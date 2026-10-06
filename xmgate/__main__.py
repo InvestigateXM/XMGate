@@ -3,6 +3,7 @@ import logging
 
 from aiogram import Bot, Dispatcher
 from aiogram.exceptions import TelegramAPIError
+from aiogram.types import BotCommand, BotCommandScopeAllChatAdministrators, BotCommandScopeAllPrivateChats
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
 from aiohttp import web
 
@@ -16,8 +17,9 @@ from .handlers import build_router
 log = logging.getLogger("xmgate")
 
 
-async def startup_checks(bot: Bot) -> None:
+async def startup_checks(bot: Bot, gate: Gate) -> None:
     me = await bot.get_me()
+    gate.username = me.username
     log.info("Running as @%s", me.username)
     log.info("Captcha icons: 2 faction logos, %d decoys", len(captcha.decoy_keys()))
     if not me.supports_join_request_queries:
@@ -25,6 +27,19 @@ async def startup_checks(bot: Bot) -> None:
             "getMe says supports_join_request_queries is false: join requests will use the DM fallback, "
             "not the Mini App opening by itself. See README step 6."
         )
+    try:
+        await bot.set_my_commands(
+            [BotCommand(command="admin", description="Set up chats you administer")], scope=BotCommandScopeAllPrivateChats()
+        )
+        await bot.set_my_commands(
+            [
+                BotCommand(command="setup", description="Check the XM Gate bot's setup in this chat"),
+                BotCommand(command="link", description="Make a request-to-join link"),
+            ],
+            scope=BotCommandScopeAllChatAdministrators(),
+        )
+    except TelegramAPIError as e:
+        log.warning("Could not set the command lists: %s", e)
 
 
 async def set_webhook(bot: Bot, cfg, allowed_updates: list[str]) -> None:
@@ -65,7 +80,7 @@ async def main() -> None:
     # Ask Telegram for exactly the update types our handlers use, so a new handler
     # (like the DM menu's button presses) can't be left out by accident.
     allowed_updates = dp.resolve_used_update_types()
-    await startup_checks(bot)
+    await startup_checks(bot, gate)
     sweeper = asyncio.create_task(gate.run_sweeper())
 
     runner = web.AppRunner(app)
