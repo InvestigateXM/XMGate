@@ -9,7 +9,8 @@ class Config:
     webhook_secret: str
     mode: str  # "webhook" or "polling"
     grace_seconds: int
-    db_path: str
+    database_url: str
+    optout_pepper: bytes
     port: int
 
     @property
@@ -35,6 +36,7 @@ def load() -> Config:
         webhook_secret=need("WEBHOOK_SECRET") if mode == "webhook" else os.environ.get("WEBHOOK_SECRET", ""),
         mode=mode,
         grace_seconds=int(os.environ.get("GRACE_SECONDS", "300")),
-        db_path=os.environ.get("DB_PATH", "data/xmgate.sqlite3"),
+        database_url=need("DATABASE_URL"),
+        optout_pepper=need("OPTOUT_PEPPER").encode(),
         port=int(os.environ.get("PORT", "8080")),
     )

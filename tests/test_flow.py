@@ -1,6 +1,11 @@
-"""End-to-end flow against a fake Bot: join request, Mini App API, outcomes."""
+"""End-to-end flow against a fake Bot and a real PostgreSQL: join request, Mini App API, DM menu actions.
 
-import json
+Needs TEST_DATABASE_URL, a database the tests may wipe, for example:
+    docker run -d --name xmgate-test-db -e POSTGRES_PASSWORD=test -p 5433:5432 postgres:16-alpine
+    export TEST_DATABASE_URL=postgresql://postgres:test@localhost:5433/postgres
+"""
+
+import os
 import time
 from types import SimpleNamespace
 
@@ -44,10 +49,23 @@ def join_request(query_id="q-1", user_id=USER):
     )
 
 
+DATABASE_URL = os.environ.get("TEST_DATABASE_URL")
+pytestmark = pytest.mark.skipif(not DATABASE_URL, reason="set TEST_DATABASE_URL to run the PostgreSQL tests")
+
+
+async def fresh_db() -> DB:
+    import asyncpg
+
+    conn = await asyncpg.connect(DATABASE_URL)
+    await conn.execute("DROP SCHEMA public CASCADE; CREATE SCHEMA public")
+    await conn.close()
+    return await DB.open(DATABASE_URL)
+
+
 @pytest.fixture
 async def env():
-    cfg = Config(TOKEN, "https://gate.example", "s", "webhook", 300, ":memory:", 0)
-    db = await DB.open(":memory:")
+    cfg = Config(TOKEN, "https://gate.example", "s", "webhook", 300, DATABASE_URL, b"pepper", 0)
+    db = await fresh_db()
     bot = FakeBot()
     gate = Gate(bot, db, cfg)
     app = web.Application()
@@ -61,7 +79,7 @@ async def env():
 
 async def call(env, path, jr_id, user_id=USER, **body):
     init = sign_init_data({"user": {"id": user_id, "first_name": "A"}, "auth_date": int(time.time())}, TOKEN)
-    token = env.gate.request_token(jr_id, user_id)
+    token = env.gate.self_token(user_id) if jr_id == "self" else env.gate.request_token(jr_id, user_id)
     res = await env.client.post(f"/api/{path}", json={"r": token, **body}, headers={"Authorization": f"tma {init}"})
     return res.status, (await res.json() if res.status == 200 else await res.text())
 
@@ -72,7 +90,7 @@ def answer_ids(stored):
 
 async def latest_attempt(env):
     row = await env.db._one("SELECT * FROM attempts ORDER BY issued_at DESC LIMIT 1")
-    return row["id"], json.loads(row["tiles"])
+    return row["id"], row["tiles"]
 
 
 async def test_unknown_user_gets_mini_app_then_approved(env):
@@ -84,7 +102,7 @@ async def test_unknown_user_gets_mini_app_then_approved(env):
     status, data = await call(env, "challenge", 1)
     assert status == 200 and data["status"] == "challenge"
     assert len(data["tiles"]) == captcha.TILE_COUNT
-    assert "answer" not in json.dumps(data["tiles"])
+    assert all(set(t) == {"id", "img"} for t in data["tiles"])
 
     attempt, stored = await latest_attempt(env)
     status, data = await call(env, "answer", 1, attempt=attempt, picked=answer_ids(stored))
@@ -185,3 +203,95 @@ async def test_forged_init_data_rejected(env):
         "/api/challenge", json={"r": env.gate.request_token(1, USER)}, headers={"Authorization": f"tma {init}"}
     )
     assert res.status == 401
+
+
+async def test_self_verification_from_dm_menu_approves_pending_requests(env):
+    await env.gate.on_join_request(join_request(query_id=None))
+    _, data = await call(env, "challenge", "self")
+    assert data["status"] == "challenge" and data["self"] is True
+    attempt, stored = await latest_attempt(env)
+    _, data = await call(env, "answer", "self", attempt=attempt, picked=answer_ids(stored))
+    assert data["status"] == "verified_self" and data["approved"] == 1
+    assert "approve_chat_join_request" in env.bot.names()
+    _, data = await call(env, "challenge", "self")
+    assert data["status"] == "already_verified"
+
+
+async def test_self_mode_has_no_admin_button(env):
+    status, _ = await call(env, "manual", "self")
+    assert status == 400
+
+
+async def test_self_token_is_bound_to_the_user(env):
+    init = sign_init_data({"user": {"id": 999}, "auth_date": int(time.time())}, TOKEN)
+    res = await env.client.post(
+        "/api/challenge", json={"r": env.gate.self_token(USER)}, headers={"Authorization": f"tma {init}"}
+    )
+    assert res.status == 403
+
+
+async def test_delete_my_data_removes_everything_and_queues_open_requests(env):
+    await env.gate.on_join_request(join_request())
+    await call(env, "challenge", 1)
+    await env.gate.forget(USER, ignore=False)
+    assert env.bot.calls[-1][1]["result"] == "queue"
+    for table in ("users", "join_requests", "attempts", "opt_outs"):
+        assert await env.db.pool.fetchval(f"SELECT count(*) FROM {table}") == 0
+
+
+async def test_opted_out_user_is_queued_and_nothing_is_stored(env):
+    await env.db.mark_verified(USER, "captcha", -1)
+    await env.gate.forget(USER, ignore=True)
+    marker = await env.db.pool.fetchval("SELECT marker FROM opt_outs")
+    assert marker == env.gate.optout_marker(USER) and str(USER).encode() not in marker
+
+    env.bot.calls.clear()
+    await env.gate.on_join_request(join_request())
+    assert env.bot.calls == [("answer_chat_join_request_query", {"chat_join_request_query_id": "q-1", "result": "queue"})]
+    assert await env.db.get_user(USER) is None
+    assert await env.db.pool.fetchval("SELECT count(*) FROM join_requests") == 0
+
+
+async def test_verify_me_turns_processing_back_on(env):
+    await env.gate.forget(USER, ignore=True)
+    _, data = await call(env, "challenge", "self")
+    assert data["status"] == "challenge"
+    assert not await env.gate.is_opted_out(USER)
+
+
+async def test_times_round_trip_as_epoch_seconds(env):
+    before = time.time()
+    await env.db.mark_verified(USER, "manual", CHAT)
+    user = await env.db.get_user(USER)
+    assert before - 1 < user["verified_at"] < time.time() + 1
+
+
+async def test_verify_me_also_approves_a_request_handed_to_the_admins(env):
+    await env.gate.on_join_request(join_request())
+    await call(env, "manual", 1)
+    _, data = await call(env, "challenge", "self")
+    attempt, stored = await latest_attempt(env)
+    _, data = await call(env, "answer", "self", attempt=attempt, picked=answer_ids(stored))
+    assert data["status"] == "verified_self" and data["approved"] == 1
+    assert env.bot.calls[-1] == ("approve_chat_join_request", {"chat_id": CHAT, "user_id": USER})
+    assert (await env.db.get_join_request(1))["outcome"] == "approved"
+
+
+async def test_queued_request_an_admin_already_decided_stays_queued(env):
+    from aiogram.exceptions import TelegramBadRequest
+
+    await env.gate.on_join_request(join_request())
+    await call(env, "manual", 1)
+
+    async def gone(**kwargs):
+        raise TelegramBadRequest(method=None, message="HIDE_REQUESTER_MISSING")
+
+    env.bot.approve_chat_join_request = gone
+    assert await env.gate.on_solved(USER, None) == 0
+    assert (await env.db.get_join_request(1))["outcome"] == "queued"
+
+
+async def test_mini_app_assets_are_versioned(env):
+    res = await env.client.get("/app/")
+    page = await res.text()
+    assert 'src="static/app.js?v=' in page and 'href="static/style.css?v=' in page

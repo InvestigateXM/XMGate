@@ -13,8 +13,6 @@ from .db import DB
 from .flow import Gate
 from .handlers import build_router
 
-ALLOWED_UPDATES = ["chat_join_request", "chat_member", "message"]
-
 log = logging.getLogger("xmgate")
 
 
@@ -29,17 +27,17 @@ async def startup_checks(bot: Bot) -> None:
         )
 
 
-async def set_webhook(bot: Bot, cfg) -> None:
+async def set_webhook(bot: Bot, cfg, allowed_updates: list[str]) -> None:
     """Keeps retrying, so the bot can start before the reverse proxy and certificate are in place."""
     while True:
         try:
             await bot.set_webhook(
                 cfg.webhook_url,
                 secret_token=cfg.webhook_secret,
-                allowed_updates=ALLOWED_UPDATES,
+                allowed_updates=allowed_updates,
                 drop_pending_updates=True,
             )
-            log.info("Webhook set to %s", cfg.webhook_url)
+            log.info("Webhook set to %s for %s", cfg.webhook_url, ", ".join(allowed_updates))
             return
         except TelegramAPIError as e:
             log.warning("Could not set webhook to %s (%s). Is the proxy host set up? Retrying in 30 s.", cfg.webhook_url, e)
@@ -49,7 +47,7 @@ async def set_webhook(bot: Bot, cfg) -> None:
 async def build_app() -> tuple[web.Application, Dispatcher, Bot, Gate]:
     cfg = config_module.load()
     bot = Bot(cfg.bot_token)
-    db = await DB.open(cfg.db_path)
+    db = await DB.open(cfg.database_url)
     gate = Gate(bot, db, cfg)
     dp = Dispatcher()
     dp.include_router(build_router(gate))
@@ -64,6 +62,9 @@ async def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     app, dp, bot, gate = await build_app()
     cfg = gate.config
+    # Ask Telegram for exactly the update types our handlers use, so a new handler
+    # (like the DM menu's button presses) can't be left out by accident.
+    allowed_updates = dp.resolve_used_update_types()
     await startup_checks(bot)
     sweeper = asyncio.create_task(gate.run_sweeper())
 
@@ -77,11 +78,11 @@ async def main() -> None:
 
     try:
         if cfg.mode == "webhook":
-            await set_webhook(bot, cfg)
+            await set_webhook(bot, cfg, allowed_updates)
             await asyncio.Event().wait()
         else:
             await bot.delete_webhook(drop_pending_updates=True)
-            await dp.start_polling(bot, allowed_updates=ALLOWED_UPDATES, handle_signals=False)
+            await dp.start_polling(bot, allowed_updates=allowed_updates, handle_signals=False)
     finally:
         sweeper.cancel()
         await runner.cleanup()
