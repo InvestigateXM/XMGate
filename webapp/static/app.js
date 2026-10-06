@@ -110,7 +110,7 @@
         el("manual-box").hidden = !!data.self;
         el("manual-hint").hidden = !data.suggest_manual;
         renderTiles(data);
-        if (!data.request_open) msg.textContent = "Your join request already timed out. Passing still verifies you for next time.";
+        if (!data.request_open) msg.textContent = "Your join request has timed out. You can still complete verification and your next join request will be approved automatically.";
         break;
       case "wait":
         el("challenge").hidden = false;
@@ -130,19 +130,19 @@
         break;
       case "verified_late":
         haptic("notificationOccurred", "success");
-        showState("✓", "Verified. Your join request had already timed out, so request to join again and you'll be let in straight away.", "good", data.chat_link);
+        showState("✓", "Verified. Your join request had timed out, so request to join again and you'll be let in straight away.", "good", data.chat_link);
         break;
       case "verified_self":
         haptic("notificationOccurred", "success");
         showState("\u2713", data.approved
-          ? "Verified. Your pending join request" + (data.approved > 1 ? "s were" : " was") + " approved."
-          : "Verified. Chats that use XM Gate will now let you in straight away.", "good");
+          ? "Verified. Your pending join request" + (data.approved > 1 ? "s were" : " was") + " also approved."
+          : "Verified. Chats that use the XM Gate bot will now automatically approve your join request.", "good");
         break;
       case "already_verified":
-        showState("\u2713", "You're already verified. Chats that use XM Gate let you in straight away.", "good");
+        showState("\u2713", "You're already verified. Chats that use the XM Gate bot will automatically approve your join request.", "good");
         break;
       case "queued":
-        showState("⌛", "Sent to the admins" + (data.chat_title ? " of " + data.chat_title : "") + ". They'll decide on your request.", "neutral");
+        showState("⌛", "Your join request was sent to the admins" + (data.chat_title ? " of " + data.chat_title : "") + ". They'll decide on your request.", "neutral");
         break;
       default:
         showState("!", "This request is closed.", "neutral");
