@@ -130,7 +130,7 @@
         break;
       case "verified_late":
         haptic("notificationOccurred", "success");
-        showState("✓", "Verified. Your join request had timed out, so request to join again and you'll be let in straight away.", "good", data.chat_link);
+        showState("✓", "Verified. Your join request had timed out, so request to join again and it will be approved automatically.", "good", data.chat_link);
         break;
       case "verified_self":
         haptic("notificationOccurred", "success");
