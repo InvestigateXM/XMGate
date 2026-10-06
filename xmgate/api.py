@@ -1,5 +1,6 @@
 """HTTP API the captcha Mini App talks to. Every call carries initData (design §6)."""
 
+import hashlib
 import json
 import logging
 import secrets
@@ -52,6 +53,13 @@ async def _auth(request: web.Request, gate: Gate) -> tuple[Ctx, dict]:
         if jr is None:
             raise web.HTTPNotFound(text="request not found")
     return Ctx(user_id, init["user"].get("username"), jr), body
+
+
+def _asset_version() -> str:
+    digest = hashlib.sha256()
+    for path in sorted((WEBAPP_DIR / "static").iterdir()):
+        digest.update(path.read_bytes())
+    return digest.hexdigest()[:12]
 
 
 def _base(jr) -> dict:
@@ -162,8 +170,15 @@ def setup_api(app: web.Application, gate: Gate) -> None:
                 await db.update_join_request(jr["id"], last_heartbeat=now)
         return web.json_response({"open": jr["outcome"] in OPEN})
 
-    async def index(request: web.Request) -> web.FileResponse:
-        return web.FileResponse(WEBAPP_DIR / "index.html")
+    # Telegram's in-app browser caches the Mini App's script and stylesheet hard, so a phone
+    # could run an old app.js against a newer server. Versioned URLs force a fresh copy.
+    version = _asset_version()
+    page = (WEBAPP_DIR / "index.html").read_text()
+    for asset in ("static/app.js", "static/style.css"):
+        page = page.replace(f'"{asset}"', f'"{asset}?v={version}"')
+
+    async def index(request: web.Request) -> web.Response:
+        return web.Response(text=page, content_type="text/html")
 
     @web.middleware
     async def security_headers(request: web.Request, handler):

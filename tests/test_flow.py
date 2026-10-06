@@ -264,3 +264,34 @@ async def test_times_round_trip_as_epoch_seconds(env):
     await env.db.mark_verified(USER, "manual", CHAT)
     user = await env.db.get_user(USER)
     assert before - 1 < user["verified_at"] < time.time() + 1
+
+
+async def test_verify_me_also_approves_a_request_handed_to_the_admins(env):
+    await env.gate.on_join_request(join_request())
+    await call(env, "manual", 1)
+    _, data = await call(env, "challenge", "self")
+    attempt, stored = await latest_attempt(env)
+    _, data = await call(env, "answer", "self", attempt=attempt, picked=answer_ids(stored))
+    assert data["status"] == "verified_self" and data["approved"] == 1
+    assert env.bot.calls[-1] == ("approve_chat_join_request", {"chat_id": CHAT, "user_id": USER})
+    assert (await env.db.get_join_request(1))["outcome"] == "approved"
+
+
+async def test_queued_request_an_admin_already_decided_stays_queued(env):
+    from aiogram.exceptions import TelegramBadRequest
+
+    await env.gate.on_join_request(join_request())
+    await call(env, "manual", 1)
+
+    async def gone(**kwargs):
+        raise TelegramBadRequest(method=None, message="HIDE_REQUESTER_MISSING")
+
+    env.bot.approve_chat_join_request = gone
+    assert await env.gate.on_solved(USER, None) == 0
+    assert (await env.db.get_join_request(1))["outcome"] == "queued"
+
+
+async def test_mini_app_assets_are_versioned(env):
+    res = await env.client.get("/app/")
+    page = await res.text()
+    assert 'src="static/app.js?v=' in page and 'href="static/style.css?v=' in page

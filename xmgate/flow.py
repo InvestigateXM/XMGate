@@ -156,15 +156,30 @@ class Gate:
         await method(chat_id=jr["chat_id"], user_id=jr["tg_user_id"])
 
     async def on_solved(self, user_id: int, chat_id: int | None) -> int:
-        """Marks the user verified and approves every open request they have. Returns how many."""
+        """Marks the user verified and approves every request still waiting in any chat. Returns how many."""
         await self.db.mark_verified(user_id, "captcha", chat_id)
         approved = 0
-        for jr in await self.db.open_requests_for_user(user_id):
-            if await self.resolve(jr, "approve"):
+        for jr in await self.db.waiting_requests_for_user(user_id):
+            if jr["outcome"] == "queued":
+                ok = await self._approve_queued(jr)
+            else:
+                ok = await self.resolve(jr, "approve")
+            if ok:
                 approved += 1
                 if jr["dm_message_id"]:
                     await self._edit_dm(jr, f"Verified. Welcome to {jr['chat_title']}.", keep_button=False)
         return approved
+
+    async def _approve_queued(self, jr) -> bool:
+        """A request already handed to the admins is still pending in Telegram, so the bot can approve it itself."""
+        try:
+            await self._by_chat(jr, "approve")
+        except TelegramAPIError as e:
+            # Most likely an admin already decided it.
+            log.info("jr %s: could not approve the queued request: %s", jr["id"], e)
+            return False
+        log.info("jr %s: approved after the user verified", jr["id"])
+        return await self.db.claim_join_request(jr["id"], "approved", from_outcomes=("queued",))
 
     async def forget(self, user_id: int, ignore: bool) -> None:
         """Delete my data, or delete and opt out when ignore is set (design §9)."""

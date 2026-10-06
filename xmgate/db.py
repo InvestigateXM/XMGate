@@ -153,6 +153,12 @@ class DB:
             "SELECT * FROM join_requests WHERE tg_user_id = $1 AND outcome IN ('pending', 'captcha')", user_id
         )
 
+    async def waiting_requests_for_user(self, user_id: int):
+        """Requests Telegram still holds as pending: open ones, and ones handed to the admins."""
+        return await self._all(
+            "SELECT * FROM join_requests WHERE tg_user_id = $1 AND outcome IN ('pending', 'captcha', 'queued')", user_id
+        )
+
     async def queued_request(self, user_id: int, chat_id: int):
         return await self._one(
             "SELECT * FROM join_requests WHERE tg_user_id = $1 AND chat_id = $2 AND outcome = 'queued' "
