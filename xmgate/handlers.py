@@ -15,13 +15,13 @@ from aiogram.types import (
 from .flow import Gate
 
 INTRO = (
-    "XM Gate checks that people asking to join Ingress chats aren't automated spam accounts. "
-    "Pass the check once and every chat that uses XM Gate lets you in straight away."
+    "The XM Gate bot checks that people asking to join Ingress chats aren't automated spam accounts. "
+    "Once you have passed the captcha, all chats that use this bot will automatically approve you in the future."
 )
 OPTED_OUT = (
-    "You asked me not to process your data. Your join requests go straight to each chat's admins, "
-    "and all I keep is an anonymous marker so I can recognise you.\n\n"
-    "Tap Verify me if you'd like automatic approval again. That turns processing back on."
+    "You asked not to process your data. Your join requests will go straight to each chat's admins, "
+    "and all we keep is an anonymous marker so the bot knows to ignore you.\n\n"
+    "Tap Verify me if you'd like automatic approval again. This will clear the marker and turns processing back on."
 )
 
 
@@ -59,8 +59,8 @@ def build_router(gate: Gate) -> Router:
     async def my_data(user_id: int) -> str:
         row = await gate.db.user_summary(user_id)
         if row is None:
-            return "I don't store anything about you."
-        lines = ["This is everything I store about you:", "", f"Telegram id: {row['tg_user_id']}"]
+            return "There is currently no data stored about you."
+        lines = ["This is everything the bot stores about you:", "", f"Telegram id: {row['tg_user_id']}"]
         if row["last_username"]:
             lines.append(f"Username when last seen: @{row['last_username']}")
         lines.append(f"First seen: {_date(row['first_seen_at'])}")
@@ -99,7 +99,7 @@ def build_router(gate: Gate) -> Router:
             text, keyboard = await my_data(user_id), back()
         elif action == "delete":
             text = (
-                "Delete everything I store about you? Next time you ask to join a chat that uses XM Gate, "
+                "Delete all data this bot has stored? Next time you ask to join a chat that uses the bot, "
                 "you'll see the captcha again."
             )
             keyboard = InlineKeyboardMarkup(
@@ -111,7 +111,7 @@ def build_router(gate: Gate) -> Router:
         elif action == "ignore":
             text = (
                 "Delete everything and stop processing you? Your join requests will go to each chat's admins "
-                "instead of being approved automatically. I'll keep only an anonymous marker so I can recognise you."
+                "instead of being approved automatically. Only an anonymous marker will be kept so the bot knows to ignore you."
             )
             keyboard = InlineKeyboardMarkup(
                 inline_keyboard=[
@@ -121,11 +121,11 @@ def build_router(gate: Gate) -> Router:
             )
         elif action == "delete:yes":
             await gate.forget(user_id, ignore=False)
-            text, keyboard = "Done. I've deleted everything I stored about you.", back()
+            text, keyboard = "Done. All data has been deleted.", back()
         elif action == "ignore:yes":
             await gate.forget(user_id, ignore=True)
             text, keyboard = await menu(user_id)
-            text = "Done. I've deleted your data and will ignore you from now on.\n\n" + text
+            text = "Done. All data has been deleted and you will be ignored by the bot from now on.\n\n" + text
         else:
             await cb.answer()
             return
