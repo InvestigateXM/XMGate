@@ -59,7 +59,7 @@
       b.setAttribute("aria-label", "Tile " + (i + 1));
       var img = document.createElement("img");
       img.alt = "";
-      img.src = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(tile.svg);
+      img.src = tile.img;
       b.appendChild(img);
       b.addEventListener("click", function () { toggle(b, tile.id); });
       grid.appendChild(b);

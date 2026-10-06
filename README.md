@@ -5,7 +5,7 @@ A shared "not a bot" check for Ingress Telegram chats. When someone asks to join
 This is the **first prototype**. It only covers the join-request flow, so you can feel how it behaves when the Mini App opens by itself:
 
 - Join request arrives. A verified account is approved at once. An unknown account gets the captcha via `sendChatJoinRequestWebApp`.
-- The captcha: "tap the two faction logos" in a 3×4 grid of Ingress item icons. A wrong answer reshuffles and rotates a fresh grid; it never declines. After the third miss there's a short wait before each new grid (5 s, 15 s, 30 s).
+- The captcha: "tap the two faction logos" in a 3×4 grid. Both logos are always there; the other ten tiles are picked at random from the rest of `xmgate/icons/` for every new grid. A wrong answer reshuffles and rotates a fresh grid; it never declines. After the third miss there's a short wait before each new grid (5 s, 15 s, 30 s).
 - "Ask an admin to approve me instead" answers the request with `queue`. If an admin then approves, the account counts as verified (manual).
 - Minimising the app starts a grace period (5 minutes by default). If the user doesn't come back, the request is declined. Solving later still verifies the account, so the next request is instant.
 - If the bot isn't the chat's join-request processor, it falls back to a DM with a "Verify me" button and the same grace period.
@@ -16,7 +16,7 @@ Flags, `/signals`, suspicious marks, log channels, opt-out and PostgreSQL are in
 | --- | --- | --- |
 | ![](docs/screenshots/challenge.png) | ![](docs/screenshots/wrong-answer.png) | ![](docs/screenshots/approved.png) |
 
-The icons are simplified placeholders, not Niantic artwork.
+The icons are in `xmgate/icons/`. The two faction logos are `avatar-faction-enlightened.png` and `avatar-faction-resistance.png`; every other PNG there is a decoy, so adding or removing one changes the pool. The server recolours each grid to a single ink on a dark tile, so the logos can't be picked out by colour, and rotates, scales and moves each icon over background noise. Tiles go to the phone as freshly rendered PNGs, never the original files.
 
 ## Try it on a test group
 

@@ -7,7 +7,7 @@
   --panel: var(--tg-theme-secondary-bg-color, #f0f3f2);
   --good: #0b8a5e;
   --bad: #c0392b;
-  --tile: #f6f3ec;
+  --tile: #121c20;
   color-scheme: light dark;
 }
 
@@ -48,8 +48,9 @@ h1 { margin: 0; font-size: 22px; line-height: 1.2; }
 .tile {
   position: relative;
   aspect-ratio: 1;
-  padding: 6%;
-  border: 2px solid transparent;
+  padding: 0;
+  overflow: hidden;
+  border: 3px solid transparent;
   border-radius: 12px;
   background: var(--tile);
   cursor: pointer;
@@ -57,7 +58,7 @@ h1 { margin: 0; font-size: 22px; line-height: 1.2; }
 }
 .tile:active { transform: scale(.96); }
 .tile img { width: 100%; height: 100%; display: block; pointer-events: none; }
-.tile[aria-pressed="true"] { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent) inset; }
+.tile[aria-pressed="true"] { border-color: var(--accent); }
 .tile[aria-pressed="true"]::after {
   content: "\2713";
   position: absolute;

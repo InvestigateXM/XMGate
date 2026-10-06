@@ -6,6 +6,7 @@ from aiogram.exceptions import TelegramAPIError
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
 from aiohttp import web
 
+from . import captcha
 from . import config as config_module
 from .api import setup_api
 from .db import DB
@@ -20,6 +21,7 @@ log = logging.getLogger("xmgate")
 async def startup_checks(bot: Bot) -> None:
     me = await bot.get_me()
     log.info("Running as @%s", me.username)
+    log.info("Captcha icons: 2 faction logos, %d decoys", len(captcha.decoy_keys()))
     if not me.supports_join_request_queries:
         log.warning(
             "getMe says supports_join_request_queries is false: join requests will use the DM fallback, "

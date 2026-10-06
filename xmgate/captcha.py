@@ -1,17 +1,34 @@
 """Builds "tap the two faction logos" challenges (design §7).
 
-Tiles are rendered here as self-contained SVGs with random ids, so the answer
-never reaches the client. The glyphs are simplified placeholders drawn for this
-prototype, not Niantic artwork. The full design rasterises tiles to PNG.
+Every grid shows both faction logos plus decoys drawn at random from the rest
+of xmgate/icons/. Drop a PNG into that folder to add a decoy; a transparent
+background works best.
+
+Tiles are rendered here as PNGs with random ids, so neither the answer nor the
+original file reaches the client. Each icon is recoloured to one ink per grid
+(so colour never gives the logos away), then rotated, scaled, moved and laid
+over background noise.
 """
 
+import base64
+import io
 import random
 import secrets
 import time
+from functools import lru_cache
+from pathlib import Path
+
+from PIL import Image, ImageChops, ImageDraw, ImageStat
+
+ICON_DIR = Path(__file__).resolve().parent / "icons"
+ANSWER_FILES = {
+    "enl": "avatar-faction-enlightened.png",
+    "res": "avatar-faction-resistance.png",
+}
 
 COLUMNS, ROWS = 3, 4
 TILE_COUNT = COLUMNS * ROWS
-ANSWERS = ("enl", "res")
+TILE_PX = 192
 
 # Waits before a new grid, by number of wrong answers in a row (design §7):
 # the first three are free, then 5 s, 15 s and 30 s.
@@ -19,71 +36,93 @@ WAITS = (0, 0, 0, 5, 15, 30)
 SUGGEST_MANUAL_AFTER = 5
 MISS_WINDOW = 3600
 
-_S = 'fill="none" stroke-linecap="round" stroke-linejoin="round"'
-
-GLYPHS = {
-    "enl": ("Enlightened", f'<circle cx="50" cy="50" r="38" {_S}/><path d="M50 16 C70 34 70 66 50 84 C30 66 30 34 50 16Z" {_S}/>'),
-    "res": ("Resistance", f'<path d="M50 12 L84 32 L84 68 L50 88 L16 68 L16 32Z" {_S}/><path d="M50 30 L50 70 M34 44 L50 30 L66 44" {_S}/>'),
-    "reso": ("Resonator", f'<path d="M50 14 L68 50 L50 86 L32 50Z" {_S}/><path d="M32 50 H68" {_S}/>'),
-    "xmp": ("XMP burster", f'<circle cx="50" cy="50" r="12" {_S}/><path d="M50 14 V30 M50 70 V86 M14 50 H30 M70 50 H86" {_S}/>'),
-    "us": ("Ultra strike", f'<path d="M50 14 L50 86 M30 34 L50 14 L70 34" {_S}/><circle cx="50" cy="62" r="8" {_S}/>'),
-    "cube": ("Power cube", f'<rect x="24" y="24" width="52" height="52" rx="4" {_S}/><path d="M24 50 H76 M50 24 V76" {_S}/>'),
-    "key": ("Portal key", f'<circle cx="36" cy="50" r="16" {_S}/><path d="M52 50 H84 M74 50 V62 M84 50 V60" {_S}/>'),
-    "shield": ("Portal shield", f'<path d="M50 14 L80 26 V50 C80 70 64 82 50 88 C36 82 20 70 20 50 V26Z" {_S}/>'),
-    "hs": ("Heat sink", f'<path d="M26 30 H74 M26 44 H74 M26 58 H74 M26 72 H74" {_S}/>'),
-    "mh": ("Multi-hack", f'<path d="M22 70 L40 30 L50 55 L60 30 L78 70" {_S}/>'),
-    "turret": ("Turret", f'<circle cx="50" cy="56" r="20" {_S}/><path d="M50 36 V14" {_S}/>'),
-    "amp": ("Link amp", f'<path d="M20 50 H80" {_S}/><circle cx="20" cy="50" r="8" {_S}/><circle cx="80" cy="50" r="8" {_S}/><path d="M40 36 L60 64" {_S}/>'),
-    "caps": ("Capsule", f'<rect x="30" y="16" width="40" height="68" rx="20" {_S}/><path d="M30 50 H70" {_S}/>'),
-    "hyper": ("Hypercube", f'<rect x="18" y="18" width="44" height="44" {_S}/><rect x="38" y="38" width="44" height="44" {_S}/>'),
-    "fa": ("Force amp", f'<path d="M50 14 L80 50 L50 86 L20 50Z" {_S}/><path d="M50 32 L50 68 M36 50 H64" {_S}/>'),
-    "beacon": ("Beacon", f'<path d="M50 86 V40" {_S}/><path d="M30 40 L50 14 L70 40Z" {_S}/><path d="M36 60 H64" {_S}/>'),
-    "frack": ("Fracker", f'<path d="M20 80 L50 20 L80 80Z" {_S}/><path d="M35 60 H65 M42 46 H58" {_S}/>'),
-}
-DECOYS = [k for k in GLYPHS if k not in ANSWERS]
-
-# One ink per grid, so colour never tells the logos apart from the items.
-INKS = ("#2F7D6D", "#3B5BA9", "#8A5A2B", "#6C4AA0", "#9A3F57", "#3F6F8F")
+# One light ink per grid on a dark tile, like the game's own UI.
+INKS = ((236, 241, 238), (150, 232, 255), (255, 214, 140), (196, 255, 214), (230, 200, 255))
+BACKGROUNDS = ((18, 28, 32), (24, 26, 36), (28, 24, 22), (16, 30, 26))
 
 
-def render_tile(key: str, ink: str, rng: random.Random) -> str:
-    rot = rng.uniform(-40, 40)
-    scale = rng.uniform(0.72, 0.95)
-    dx, dy = rng.uniform(-6, 6), rng.uniform(-6, 6)
-    width = rng.uniform(4.5, 6.5)
-    noise = []
-    for _ in range(rng.randint(5, 9)):
+@lru_cache(maxsize=1)
+def icon_masks() -> dict[str, Image.Image]:
+    """Alpha mask of every icon, cropped to its content. Keys: 'enl', 'res', and decoy file stems."""
+    masks = {}
+    for path in sorted(ICON_DIR.glob("*.png")):
+        img = Image.open(path).convert("RGBA")
+        alpha = img.getchannel("A")
+        # Light icons keep their shading, dark ones (black or grey on transparency) are
+        # inverted, so inner detail survives the recolouring. Then stretch each icon to
+        # full strength, so a coloured logo looks no fainter than a white item.
+        lum = img.convert("L")
+        if _mean(lum, alpha) < 110:
+            lum = ImageChops.invert(lum)
+        mask = ImageChops.multiply(alpha, lum)
+        peak = mask.getextrema()[1]
+        if peak:
+            mask = mask.point(lambda v, peak=peak: min(255, v * 255 // peak))
+        # Crop to the visible shape; faint glows would otherwise make the icon look small.
+        box = mask.point(lambda v: 255 if v > 48 else 0).getbbox()
+        if not box:
+            continue
+        key = next((k for k, f in ANSWER_FILES.items() if f == path.name), path.stem)
+        masks[key] = mask.crop(box)
+    missing = set(ANSWER_FILES) - set(masks)
+    if missing:
+        raise RuntimeError(f"faction logo missing from {ICON_DIR}: {', '.join(ANSWER_FILES[k] for k in missing)}")
+    return masks
+
+
+def _mean(lum: Image.Image, alpha: Image.Image) -> float:
+    """Mean luminance of the visible pixels."""
+    visible = alpha.point(lambda v: 255 if v > 32 else 0)
+    return ImageStat.Stat(lum, mask=visible).mean[0] if visible.getbbox() else 255
+
+
+def decoy_keys() -> list[str]:
+    return [k for k in icon_masks() if k not in ANSWER_FILES]
+
+
+def render_tile(key: str, ink: tuple, bg: tuple, rng: random.Random) -> bytes:
+    size = TILE_PX
+    tile = Image.new("RGB", (size, size), tuple(max(0, min(255, c + rng.randint(-6, 6))) for c in bg))
+    draw = ImageDraw.Draw(tile, "RGBA")
+    for _ in range(rng.randint(6, 11)):
+        alpha = rng.randint(25, 60)
         if rng.random() < 0.5:
-            noise.append(
-                f'<circle cx="{rng.uniform(4, 96):.1f}" cy="{rng.uniform(4, 96):.1f}" r="{rng.uniform(1, 3):.1f}" '
-                f'fill="{ink}" opacity="{rng.uniform(.12, .3):.2f}"/>'
-            )
+            x, y, r = rng.uniform(0, size), rng.uniform(0, size), rng.uniform(1.5, 4)
+            draw.ellipse((x - r, y - r, x + r, y + r), fill=(*ink, alpha))
         else:
-            noise.append(
-                f'<path d="M{rng.uniform(0, 100):.1f} {rng.uniform(0, 100):.1f} L{rng.uniform(0, 100):.1f} '
-                f'{rng.uniform(0, 100):.1f}" stroke="{ink}" stroke-width="{rng.uniform(1, 2):.1f}" '
-                f'opacity="{rng.uniform(.1, .22):.2f}"/>'
+            draw.line(
+                (rng.uniform(0, size), rng.uniform(0, size), rng.uniform(0, size), rng.uniform(0, size)),
+                fill=(*ink, alpha),
+                width=rng.randint(1, 2),
             )
-    glyph = GLYPHS[key][1]
-    return (
-        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">'
-        + "".join(noise)
-        + f'<g transform="translate({50 + dx:.1f} {50 + dy:.1f}) rotate({rot:.1f}) scale({scale:.2f}) translate(-50 -50)" '
-        f'stroke="{ink}" stroke-width="{width:.1f}">{glyph}</g></svg>'
-    )
+
+    mask = icon_masks()[key]
+    # Size by area, so tall thin icons (like the Enlightened logo) don't look smaller than square ones.
+    target = size * rng.uniform(0.52, 0.64)
+    scale = min(target / (mask.width * mask.height) ** 0.5, size * 0.8 / max(mask.size))
+    mask = mask.resize((max(1, round(mask.width * scale)), max(1, round(mask.height * scale))), Image.LANCZOS)
+    mask = mask.rotate(rng.uniform(-40, 40), resample=Image.BICUBIC, expand=True)
+    x = (size - mask.width) // 2 + rng.randint(-10, 10)
+    y = (size - mask.height) // 2 + rng.randint(-10, 10)
+    tile.paste(Image.new("RGB", mask.size, ink), (x, y), mask)
+
+    out = io.BytesIO()
+    tile.save(out, format="PNG", optimize=True)
+    return out.getvalue()
 
 
 def new_challenge(rng: random.Random | None = None) -> tuple[list[dict], list[dict]]:
     """Returns (stored tiles with answers, public tiles for the client)."""
     rng = rng or random.SystemRandom()
-    keys = list(ANSWERS) + rng.sample(DECOYS, TILE_COUNT - len(ANSWERS))
+    keys = list(ANSWER_FILES) + rng.sample(decoy_keys(), TILE_COUNT - len(ANSWER_FILES))
     rng.shuffle(keys)
-    ink = rng.choice(INKS)
+    ink, bg = rng.choice(INKS), rng.choice(BACKGROUNDS)
     stored, public = [], []
     for key in keys:
         tile_id = secrets.token_urlsafe(9)
-        stored.append({"id": tile_id, "key": key, "answer": key in ANSWERS})
-        public.append({"id": tile_id, "svg": render_tile(key, ink, rng)})
+        png = base64.b64encode(render_tile(key, ink, bg, rng)).decode()
+        stored.append({"id": tile_id, "key": key, "answer": key in ANSWER_FILES})
+        public.append({"id": tile_id, "img": f"data:image/png;base64,{png}"})
     return stored, public
 
 
