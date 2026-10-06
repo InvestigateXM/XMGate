@@ -5,8 +5,8 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY xmgate xmgate
 COPY webapp webapp
-RUN useradd --system --uid 1000 xmgate && mkdir -p /data && chown xmgate /data
+RUN useradd --system --uid 1000 xmgate
 USER xmgate
-ENV DB_PATH=/data/xmgate.sqlite3 PORT=8080
+ENV PORT=8080
 EXPOSE 8080
 CMD ["python", "-m", "xmgate"]

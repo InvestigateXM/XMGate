@@ -24,9 +24,10 @@ CSP = (
 
 
 class Ctx:
-    def __init__(self, user_id: int, jr):
+    def __init__(self, user_id: int, username: str | None, jr):
         self.user_id = user_id
-        self.jr = jr
+        self.username = username
+        self.jr = jr  # None when the app was opened from "Verify me" in the DM menu
 
 
 async def _auth(request: web.Request, gate: Gate) -> tuple[Ctx, dict]:
@@ -42,17 +43,22 @@ async def _auth(request: web.Request, gate: Gate) -> tuple[Ctx, dict]:
         body = await request.json()
     except json.JSONDecodeError:
         raise web.HTTPBadRequest(text="bad json")
-    jr_id = gate.check_token(str(body.get("r", "")), user_id)
-    if jr_id is None:
+    valid, jr_id = gate.parse_token(str(body.get("r", "")), user_id)
+    if not valid:
         raise web.HTTPForbidden(text="this link is not for you")
-    jr = await gate.db.get_join_request(jr_id)
+    jr = None
+    if jr_id is not None:
+        jr = await gate.db.get_join_request(jr_id)
+        if jr is None:
+            raise web.HTTPNotFound(text="request not found")
+    return Ctx(user_id, init["user"].get("username"), jr), body
+
+
+def _base(jr) -> dict:
     if jr is None:
-        raise web.HTTPNotFound(text="request not found")
-    return Ctx(user_id, jr), body
-
-
-def _chat_link(jr) -> str | None:
-    return f"https://t.me/{jr['chat_username']}" if jr["chat_username"] else None
+        return {"chat_title": None, "chat_link": None, "self": True}
+    link = f"https://t.me/{jr['chat_username']}" if jr["chat_username"] else None
+    return {"chat_title": jr["chat_title"], "chat_link": link, "self": False}
 
 
 def setup_api(app: web.Application, gate: Gate) -> None:
@@ -61,27 +67,37 @@ def setup_api(app: web.Application, gate: Gate) -> None:
     async def challenge(request: web.Request) -> web.Response:
         ctx, _ = await _auth(request, gate)
         jr = ctx.jr
-        base = {"chat_title": jr["chat_title"], "chat_link": _chat_link(jr)}
-        if jr["outcome"] in ("approved", "admin_approved"):
-            return web.json_response({**base, "status": "approved"})
+        base = _base(jr)
         user = await db.get_user(ctx.user_id)
-        if user and user["verified_at"]:
-            if jr["outcome"] in OPEN:
-                await gate.resolve(jr, "approve")
+        verified = bool(user and user["verified_at"])
+
+        if jr is None:
+            # "Verify me" from the DM menu. Opening it turns processing back on for an opted-out user.
+            if await db.remove_opt_out(gate.optout_marker(ctx.user_id)):
+                log.info("an opted-out user started verification, opt-out removed")
+            if verified:
+                return web.json_response({**base, "status": "already_verified"})
+            await db.upsert_user(ctx.user_id, ctx.username)
+        else:
+            if jr["outcome"] in ("approved", "admin_approved"):
                 return web.json_response({**base, "status": "approved"})
-            return web.json_response({**base, "status": "verified_late"})
-        if jr["outcome"] == "queued":
-            return web.json_response({**base, "status": "queued"})
+            if verified:
+                if jr["outcome"] in OPEN:
+                    await gate.resolve(jr, "approve")
+                    return web.json_response({**base, "status": "approved"})
+                return web.json_response({**base, "status": "verified_late"})
+            if jr["outcome"] == "queued":
+                return web.json_response({**base, "status": "queued"})
 
         misses = await db.recent_misses(ctx.user_id, time.time() - captcha.MISS_WINDOW)
         wait = captcha.wait_seconds(misses)
-        suggest_manual = len(misses) >= captcha.SUGGEST_MANUAL_AFTER
+        suggest_manual = jr is not None and len(misses) >= captcha.SUGGEST_MANUAL_AFTER
         if wait:
             return web.json_response({**base, "status": "wait", "wait": wait, "suggest_manual": suggest_manual})
 
         stored, public = captcha.new_challenge()
         attempt_id = secrets.token_urlsafe(12)
-        await db.add_attempt(attempt_id, ctx.user_id, jr["id"], stored)
+        await db.add_attempt(attempt_id, ctx.user_id, jr["id"] if jr else None, stored)
         return web.json_response(
             {
                 **base,
@@ -91,33 +107,38 @@ def setup_api(app: web.Application, gate: Gate) -> None:
                 "columns": captcha.COLUMNS,
                 "misses": len(misses),
                 "suggest_manual": suggest_manual,
-                "request_open": jr["outcome"] in OPEN,
+                "request_open": jr is None or jr["outcome"] in OPEN,
             }
         )
 
     async def answer(request: web.Request) -> web.Response:
         ctx, body = await _auth(request, gate)
+        jr_id = ctx.jr["id"] if ctx.jr else None
         attempt = await db.get_attempt(str(body.get("attempt", "")))
-        if attempt is None or attempt["tg_user_id"] != ctx.user_id or attempt["join_request_id"] != ctx.jr["id"]:
+        if attempt is None or attempt["tg_user_id"] != ctx.user_id or attempt["join_request_id"] != jr_id:
             raise web.HTTPNotFound(text="unknown attempt")
         picked = [str(p) for p in body.get("picked", [])][:captcha.TILE_COUNT]
-        correct = captcha.is_correct(json.loads(attempt["tiles"]), picked)
+        correct = captcha.is_correct(attempt["tiles"], picked)
         solve_ms = body.get("solve_ms")
         if not await db.answer_attempt(
             attempt["id"], correct, int(solve_ms) if isinstance(solve_ms, (int, float)) else None, bool(body.get("had_touch"))
         ):
             raise web.HTTPConflict(text="attempt already answered")
-        base = {"chat_title": ctx.jr["chat_title"], "chat_link": _chat_link(ctx.jr)}
+        base = _base(ctx.jr)
         if not correct:
-            log.info("jr %s: wrong answer from user %s", ctx.jr["id"], ctx.user_id)
+            log.info("jr %s: wrong answer from user %s", jr_id, ctx.user_id)
             return web.json_response({**base, "status": "wrong"})
-        await gate.on_solved(ctx.user_id, ctx.jr["chat_id"])
-        jr = await db.get_join_request(ctx.jr["id"])
+        approved = await gate.on_solved(ctx.user_id, ctx.jr["chat_id"] if ctx.jr else None)
+        if ctx.jr is None:
+            return web.json_response({**base, "status": "verified_self", "approved": approved})
+        jr = await db.get_join_request(jr_id)
         status = "approved" if jr["outcome"] == "approved" else "verified_late"
         return web.json_response({**base, "status": status})
 
     async def manual(request: web.Request) -> web.Response:
         ctx, _ = await _auth(request, gate)
+        if ctx.jr is None:
+            raise web.HTTPBadRequest(text="no join request to hand to the admins")
         if ctx.jr["outcome"] in OPEN:
             await gate.resolve(ctx.jr, "queue")
         jr = await db.get_join_request(ctx.jr["id"])
@@ -126,6 +147,8 @@ def setup_api(app: web.Application, gate: Gate) -> None:
     async def event(request: web.Request) -> web.Response:
         ctx, body = await _auth(request, gate)
         jr = ctx.jr
+        if jr is None:
+            return web.json_response({"open": False})
         kind = body.get("type")
         if jr["outcome"] in OPEN and jr["path"] == "query":
             now = time.time()

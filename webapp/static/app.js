@@ -29,7 +29,8 @@
   }
 
   function setChat(data) {
-    if (data && data.chat_title) el("chat").textContent = "Joining " + data.chat_title;
+    if (data && data.self) el("chat").textContent = "Verify your account";
+    else if (data && data.chat_title) el("chat").textContent = "Joining " + data.chat_title;
   }
 
   function showState(icon, text, tone, link) {
@@ -106,14 +107,14 @@
       case "challenge":
         attemptId = data.attempt;
         el("challenge").hidden = false;
-        el("manual-box").hidden = false;
+        el("manual-box").hidden = !!data.self;
         el("manual-hint").hidden = !data.suggest_manual;
         renderTiles(data);
         if (!data.request_open) msg.textContent = "Your join request already timed out. Passing still verifies you for next time.";
         break;
       case "wait":
         el("challenge").hidden = false;
-        el("manual-box").hidden = false;
+        el("manual-box").hidden = !!data.self;
         countdown(data.wait, data.suggest_manual);
         break;
       case "wrong":
@@ -130,6 +131,15 @@
       case "verified_late":
         haptic("notificationOccurred", "success");
         showState("✓", "Verified. Your join request had already timed out, so request to join again and you'll be let in straight away.", "good", data.chat_link);
+        break;
+      case "verified_self":
+        haptic("notificationOccurred", "success");
+        showState("\u2713", data.approved
+          ? "Verified. Your pending join request" + (data.approved > 1 ? "s were" : " was") + " approved."
+          : "Verified. Chats that use XM Gate will now let you in straight away.", "good");
+        break;
+      case "already_verified":
+        showState("\u2713", "You're already verified. Chats that use XM Gate let you in straight away.", "good");
         break;
       case "queued":
         showState("⌛", "Sent to the admins" + (data.chat_title ? " of " + data.chat_title : "") + ". They'll decide on your request.", "neutral");

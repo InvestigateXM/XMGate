@@ -25,26 +25,54 @@ class Gate:
         self.config = config
         self._key = hmac.new(b"xmgate-request-link", config.bot_token.encode(), hashlib.sha256).digest()
 
-    # Signed link from the Mini App back to its join request
+    # Signed links from the Mini App back to its join request, or to "verify me" from the DM menu
+
+    def _sign(self, subject: str) -> str:
+        return hmac.new(self._key, subject.encode(), hashlib.sha256).hexdigest()[:32]
 
     def request_token(self, jr_id: int, user_id: int) -> str:
-        sig = hmac.new(self._key, f"{jr_id}:{user_id}".encode(), hashlib.sha256).hexdigest()[:32]
-        return f"{jr_id}.{sig}"
+        return f"{jr_id}.{self._sign(f'{jr_id}:{user_id}')}"
 
-    def check_token(self, token: str, user_id: int) -> int | None:
-        jr_id, _, sig = token.partition(".")
-        if not jr_id.isdigit():
-            return None
-        return int(jr_id) if hmac.compare_digest(self.request_token(int(jr_id), user_id), token) else None
+    def self_token(self, user_id: int) -> str:
+        return f"self.{self._sign(f'self:{user_id}')}"
+
+    def parse_token(self, token: str, user_id: int) -> tuple[bool, int | None]:
+        """(valid, join request id). A valid self-verification token has no join request."""
+        head, _, _ = token.partition(".")
+        if head == "self":
+            return hmac.compare_digest(self.self_token(user_id), token), None
+        if not head.isdigit():
+            return False, None
+        return hmac.compare_digest(self.request_token(int(head), user_id), token), int(head)
 
     def app_url(self, jr_id: int, user_id: int) -> str:
         return f"{self.config.app_url}?r={self.request_token(jr_id, user_id)}"
+
+    def self_verify_url(self, user_id: int) -> str:
+        return f"{self.config.app_url}?r={self.self_token(user_id)}"
+
+    # Opt-out marker (design §9): keyed hash, so a database dump alone can't reveal the ids
+
+    def optout_marker(self, user_id: int) -> bytes:
+        return hmac.new(self.config.optout_pepper, str(user_id).encode(), hashlib.sha256).digest()
+
+    async def is_opted_out(self, user_id: int) -> bool:
+        return await self.db.is_opted_out(self.optout_marker(user_id))
 
     # Incoming join request (design §3)
 
     async def on_join_request(self, req) -> None:
         user = req.from_user
         chat = req.chat
+        if await self.is_opted_out(user.id):
+            # Store and log nothing about this user; hand the request to the admins.
+            if req.query_id:
+                try:
+                    await self.bot.answer_chat_join_request_query(chat_join_request_query_id=req.query_id, result="queue")
+                except TelegramAPIError as e:
+                    log.warning("opted-out join request in %s: could not queue: %s", chat.id, e)
+            log.info("join request in %s from an opted-out user, left for the admins", chat.id)
+            return
         await self.db.upsert_user(user.id, user.username)
         known = await self.db.get_user(user.id)
         path = "query" if req.query_id else "dm"
@@ -137,6 +165,16 @@ class Gate:
                 if jr["dm_message_id"]:
                     await self._edit_dm(jr, f"Verified. Welcome to {jr['chat_title']}.", keep_button=False)
         return approved
+
+    async def forget(self, user_id: int, ignore: bool) -> None:
+        """Delete my data, or delete and opt out when ignore is set (design §9)."""
+        # Open requests would otherwise hang until they expire: hand them to the admins first.
+        for jr in await self.db.open_requests_for_user(user_id):
+            await self.resolve(jr, "queue")
+        await self.db.forget_user(user_id)
+        if ignore:
+            await self.db.add_opt_out(self.optout_marker(user_id))
+        log.info("a user deleted their data%s", " and opted out" if ignore else "")
 
     async def on_member_joined(self, user_id: int, chat_id: int) -> None:
         """An admin approved a request the bot had queued: count it as manual verification."""

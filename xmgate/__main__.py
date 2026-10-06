@@ -49,7 +49,7 @@ async def set_webhook(bot: Bot, cfg) -> None:
 async def build_app() -> tuple[web.Application, Dispatcher, Bot, Gate]:
     cfg = config_module.load()
     bot = Bot(cfg.bot_token)
-    db = await DB.open(cfg.db_path)
+    db = await DB.open(cfg.database_url)
     gate = Gate(bot, db, cfg)
     dp = Dispatcher()
     dp.include_router(build_router(gate))
